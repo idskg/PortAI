@@ -1,7 +1,7 @@
-import whisper
 import sounddevice as sd
 import subprocess
 import torch
+from faster_whisper import WhisperModel
 
 def gpucheck():
     # check for available nvidia gpu
@@ -18,20 +18,24 @@ def vramCheck():
     except Exception as e:
         return -1
 
+def modelDecider():
+    if gpucheck():
+        vram = vramCheck()
+        match vram:
+            case vram if vram <= 3.0:
+                model = WhisperModel("base", device="cuda", compute_type="int8_float16")
+            case vram if vram >= 3.001:
+                model = WhisperModel("turbo", device="cuda", compute_type="float16")
+            case _:
+                model = WhisperModel("base", device="cuda", compute_type="float16")
+    else:
+        model = WhisperModel("base", device="cpu", compute_type="int8")
+    return model
+
 def main():
     if (__name__ == "__main__"):
+        model = modelDecider()
+        print("Model loaded successfully.")
+        
 
-        if gpucheck():
-            vram = vramCheck()
-            match vram:
-                case vram if vram <= 3.0:
-                    model = whisper.load_model("small", device="cuda")
-                case vram if vram <= 7.0:
-                    model = whisper.load_model("turbo", device="cuda")
-                case vram if vram <= 15.0:
-                    model = whisper.load_model("large-v3", device="cuda")
-                case _:
-                    model = whisper.load_model("base", device="cuda")
-        else:
-            model = whisper.load_model("base", device="cpu")
 main()
