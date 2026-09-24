@@ -4,7 +4,11 @@ import torch
 from faster_whisper import WhisperModel
 
 def gpucheck():
-    # check for available nvidia gpu
+    """Checks for which nvidia gpu is available
+
+    Returns:
+        bool: Returns True if Nvidia GPU exists else false
+    """
     try:
         subprocess.check_output(["nvidia-smi"])
         return True
@@ -12,6 +16,11 @@ def gpucheck():
         return False
 
 def vramCheck():
+    """Checks amount of vram
+
+    Returns:
+        int: Size of vram
+    """
     try:
         total_vram = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
         return total_vram
@@ -19,6 +28,11 @@ def vramCheck():
         return -1
 
 def modelDecider():
+    """Chooses models
+
+    Returns:
+        WhisperModel: Returns whispermodel based on hardware
+    """
     if gpucheck():
         vram = vramCheck()
         match vram:
