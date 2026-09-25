@@ -2,6 +2,9 @@ import sounddevice as sd
 import torch
 import ctranslate2
 from faster_whisper import WhisperModel
+import numpy as np
+
+audioBuffer = np.zeros(0, dtype=np.float32)
 
 def gpuCheck():
     """Checks for which nvidia gpu is available
@@ -52,12 +55,42 @@ def modelDecider():
             print(f"GPU initialization failed: {e}")
     print("Running on CPU")
     return WhisperModel("base", device="cpu", compute_type="int8")
+
+def audioRecord(model):
+    global audioBuffer
+    SAMPLE_RATE = 16000
+    CHANNELS = 1
+    CHUNK_DURATION = 5
+    CHUNK_SIZE = int(SAMPLE_RATE * CHUNK_DURATION)
+    print("🎤 Listening... Press Ctrl+C to stop.")
+    try:
+        with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, dtype='float32', callback=audioCallback):
+            while True:
+                if len(audioBuffer) >= CHUNK_SIZE:
+                    current_chunk = audioBuffer[:CHUNK_SIZE]
+                    audioBuffer = audioBuffer[CHUNK_SIZE:]
+                    
+                    segments, info = model.transcribe(current_chunk, beam_size=5)
+                    
+                    for segment in segments:
+                        if segment.text.strip():
+                            print(f"[{info.language}] {segment.text}")
+                            
+    except KeyboardInterrupt:
+        print("\nRecording stopped.")
+        
+
+def audioCallback(indata, frames, time, status):
+    global audioBuffer
+    if status:
+        print(f"status warning: {status}")
+    audioBuffer = np.append(audioBuffer, indata.ravel())
     
 
 def main():
     model = modelDecider()
     print("Model loaded successfully.")
-        
+    audioRecord(model)
 
 if (__name__ == "__main__"):
     main()
