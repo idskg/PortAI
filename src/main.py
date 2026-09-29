@@ -4,7 +4,15 @@ import ctranslate2
 from faster_whisper import WhisperModel
 import numpy as np
 
+<<<<<<< Updated upstream
 audioBuffer = np.zeros(0, dtype=np.float32)
+=======
+"""
+settings for the microphone
+"""
+SAMPLE_RATE = 16000
+CHANNELS = 1
+>>>>>>> Stashed changes
 
 def gpuCheck():
     """Checks for which nvidia gpu is available
@@ -48,6 +56,7 @@ def modelDecider():
                 compute_type = "int8_float16"
             else:
                 compute_type = "float32"
+<<<<<<< Updated upstream
             print(f"Loading {model_name} on CUDA")
             return WhisperModel(model_name, device="cuda",compute_type=compute_type)
         
@@ -86,11 +95,87 @@ def audioCallback(indata, frames, time, status):
         print(f"status warning: {status}")
     audioBuffer = np.append(audioBuffer, indata.ravel())
     
+=======
+            return WhisperModel(
+                model_name, device="cuda", compute_type=compute_type
+            )
+
+        except Exception as e:
+            pass
+    return WhisperModel("base", device="cpu", compute_type="int8")
+
+def audioRecord():
+
+    """
+    Records the audio into chunks and then appends them together
+    """
+
+    audio_data = []
+
+    def audioappend(indata, frames, time_info, status):
+        if status:
+            print(status)
+        audio_data.append(indata.copy())
+
+    # Explicitly using keyword arguments for safety
+    with sd.InputStream(
+        samplerate=SAMPLE_RATE, channels=CHANNELS, callback=audioappend
+    ):
+        while keyboard.is_pressed("ctrl") and keyboard.is_pressed("alt"):
+            time.sleep(0.02)
+
+    return audio_data
+
+def inputCheck():
+
+    """
+    Checks if both keys are pressed then runs the transcribeaudio function
+    checks for key input 20 times a second
+    """
+
+    while True:
+        if keyboard.is_pressed("ctrl") and keyboard.is_pressed("alt"):
+            break
+        time.sleep(0.05)
+
+def transcribeaudio(model, audio_data):
+    """
+    transcribes the audio in chunks and adds them together
+    also returns null if no audio input is given
+    """
+    if not audio_data:
+        return
+
+    audio_np = np.concatenate(audio_data, axis=0).flatten().astype(np.float32)
+
+    if len(audio_np) < SAMPLE_RATE * 0.5:
+        return
+
+    segments, info = model.transcribe(
+        audio_np, beam_size=5, language="en", vad_filter=True
+    )
+    text = "".join([segment.text for segment in segments]).strip()
+
+    if text:
+        return text
+>>>>>>> Stashed changes
 
 def main():
     model = modelDecider()
     print("Model loaded successfully.")
+<<<<<<< Updated upstream
     audioRecord(model)
+=======
+    try:
+        while True:
+            inputCheck()
+            audio_data = audioRecord()
+            print("DONE")
+            prompt = transcribeaudio(model, audio_data)
+            print(prompt)
+    except KeyboardInterrupt:
+        print(f"EXIT\n{model}")
+>>>>>>> Stashed changes
 
 if (__name__ == "__main__"):
     main()
