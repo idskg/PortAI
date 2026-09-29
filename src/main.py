@@ -12,7 +12,6 @@ settings for the microphone
 SAMPLE_RATE = 16000
 CHANNELS = 1
 
-
 def gpuCheck():
     """Checks for which nvidia gpu is available
 
@@ -20,7 +19,6 @@ def gpuCheck():
         bool: Returns True if Nvidia GPU exists else false
     """
     return torch.cuda.is_available()
-
 
 def vramCheck():
     """Checks amount of vram
@@ -35,7 +33,6 @@ def vramCheck():
         return total_vram
     except Exception as e:
         return -1
-
 
 def modelDecider():
     """Chooses models
@@ -66,9 +63,7 @@ def modelDecider():
 
         except Exception as e:
             pass
-    print(model_name)
     return WhisperModel("base", device="cpu", compute_type="int8")
-
 
 def audioRecord():
 
@@ -92,7 +87,6 @@ def audioRecord():
 
     return audio_data
 
-
 def inputCheck():
 
     """
@@ -104,7 +98,6 @@ def inputCheck():
         if keyboard.is_pressed("ctrl") and keyboard.is_pressed("alt"):
             break
         time.sleep(0.05)
-
 
 def transcribeaudio(model, audio_data):
     """
@@ -127,9 +120,6 @@ def transcribeaudio(model, audio_data):
     if text:
         return text
 
-def questionForm(prompt_):
-    pass
-
 def main():
     model = modelDecider()
     print("Model loaded successfully.")
@@ -140,7 +130,6 @@ def main():
             print("DONE")
             prompt = transcribeaudio(model, audio_data)
             print(prompt)
-            Qtype = questionForm(prompt)
     except KeyboardInterrupt:
         print(f"EXIT\n{model}")
 
