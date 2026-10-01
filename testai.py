@@ -8,40 +8,26 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="MiniMaxAI/MiniMax-M3",
+    model="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
      messages=[
         {
             "role": "system",
-            "content": """
-            You are a lightweight intent classification engine. Your sole task is to analyze incoming user questions and classify whether answering them requires visual context (a screen capture/image) or purely text/system processing.
-
-## CLASSIFICATION RULES
-
-1. **CLASSIFY AS VISION IF:**
-   - The user explicitly mentions looking at, reading, or analyzing the screen, UI, display, window, image, layout, or visual elements.
-   - Information required to answer the question is missing, ambiguous, or incomplete, and could be resolved by viewing the current display state. **Always default to `VISION` when in doubt.**
-
-2. **CLASSIFY AS TEXT ONLY IF:**
-   - The question is fully self-contained, theoretical, code-only, conversational, or a direct system/CLI command with no missing contextual details.
-
-## OUTPUT FORMAT
-
-Respond ONLY with a JSON object in this exact schema. Do not include introductory text, explanations, or Markdown blocks outside the JSON:
-
-
-ONLY RESPOND WITH VISION OR TEXT dont add classification or anything just the two words TEXT or VISION
-            """
+            "content": "Answer the question in a concise and informative manner.while keeping the context of the previous questions."
         },
         {
             "role": "user",
             "content": [
                 {
                     "type": "text",
-                    "text": "whats wrong with this code"
+                    "text": "what was my last question?"
                 }
             ]
         }
     ]
 )
-
-print(response.choices[0].message.content)
+answer_json = response.to_json()
+answer_json = json.loads(answer_json)
+answer = answer_json["choices"][0]["message"]["content"]
+answer_reasoning = answer_json["choices"][0]["message"]["reasoning"]
+print(answer)
+print(answer_reasoning)
