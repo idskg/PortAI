@@ -1,19 +1,35 @@
+import json
+import os
+import time
+
 import ctranslate2
 import keyboard
 import numpy as np
 import sounddevice as sd
-import time
 import torch
-from faster_whisper import WhisperModel
 from dotenv import load_dotenv
-import os
+from faster_whisper import WhisperModel
 from openai import OpenAI
-import json
 
 load_dotenv()
 
-question_decider_context = """
-            You are a lightweight intent classification engine. Your sole task is to analyze incoming user questions and classify whether answering them requires visual context (a screen capture/image) or purely text/system processing.
+# settings for the microphone
+
+SAMPLE_RATE = 16000
+CHANNELS = 1
+
+client = OpenAI(
+    base_url="https://api.tokenfactory.nebius.com/v1/",
+    api_key=os.getenv("NEBIUS_API_KEY")
+)
+
+CLASSIFIER_MODEL = "MiniMaxAI/MiniMax-M3"
+TEXT_MODEL = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"
+VISION_MODEL = None
+
+
+QUESTION_DECIDER_CONTEXT = """
+    You are a lightweight intent classification engine. Your sole task is to analyze incoming user questions and classify whether answering them requires visual context (a screen capture/image) or purely text/system processing.
 
     ## CLASSIFICATION RULES
 
@@ -25,58 +41,38 @@ question_decider_context = """
         - The question is fully self-contained, theoretical, code-only, conversational, or a direct system/CLI command with no missing contextual details.
 
     ## OUTPUT FORMAT
-
-    Respond ONLY with a JSON object in this exact schema. Do not include introductory text, explanations, or Markdown blocks outside the JSON:
-
-
-    ONLY RESPOND WITH VISION OR TEXT dont add classification or anything just the two words TEXT or VISION
-                """
-
-"""
-settings and getting api key for the nebuis token factory
-"""
-
-client = OpenAI(
-    base_url="https://api.tokenfactory.nebius.com/v1/",
-    api_key=os.getenv("NEBIUS_API_KEY")
-)
-
-"""
-settings for the microphone
-"""
-SAMPLE_RATE = 16000
-CHANNELS = 1
-
-def gpuCheck():
-    """Checks for which nvidia gpu is available
-
-    Returns:
-        bool: Returns True if Nvidia GPU exists else false
+    RESPOND WITH EXACTLY ONE WORD:
+    TEXT OR VISION
+    dont add classification or anything just the two words TEXT or VISION
     """
-    return torch.cuda.is_available()
 
-def vramCheck():
-    """Checks amount of vram
+def vram_check():
+    """Returns the total VRAM of the first CUDA device in GB.
 
     Returns:
-        int: Size of vram in GB
+        float: Total VRAM in GB, or -1 if no CUDA device is available.
     """
     try:
         total_vram = torch.cuda.get_device_properties(0).total_memory / (
             1024**3
         )
         return total_vram
-    except Exception as e:
+    except Exception:
         return -1
 
-def modelDecider():
-    """Chooses models
+def model_decider():
+    """
+    Select and initialize a Whisper model based on available hardware.
+
+    Uses CUDA when available and selects the model size based on VRAM.
+    Falls back to the CPU with INT8 quantization if CUDA initialization
+    fails or CUDA is unavailable.
 
     Returns:
-        WhisperModel: Returns whispermodel based on hardware
+        WhisperModel: Initialized Faster-Whisper model.
     """
-    if gpuCheck():
-        vram = vramCheck()
+    if torch.cuda.is_available():
+        vram = vram_check()
         if 0 < vram <= 3.0:
             model_name = "base"
         elif vram > 3.0:
@@ -97,48 +93,59 @@ def modelDecider():
             )
 
         except Exception as e:
-            pass
+            print(f"CUDA initialization failed: {e}")
+            print("Falling back to CPU.")
     return WhisperModel("base", device="cpu", compute_type="int8")
 
-def audioRecord():
+def audio_record():
+    """Record microphone input while Ctrl+Alt are held.
 
-    """
-    Records the audio into chunks and then appends them together
+    Audio is captured in chunks through a sounddevice InputStream.
+    Recording stops when either Ctrl or Alt is released.
+
+    Returns:
+        list[np.ndarray]: Recorded audio chunks.
     """
 
     audio_data = []
 
-    def audioappend(indata, frames, time_info, status):
+    def audio_callback(indata, _frames, _time_info, status):
         if status:
             print(status)
         audio_data.append(indata.copy())
 
     # Explicitly using keyword arguments for safety
     with sd.InputStream(
-        samplerate=SAMPLE_RATE, channels=CHANNELS, callback=audioappend
+        samplerate=SAMPLE_RATE, channels=CHANNELS, callback=audio_callback
     ):
         while keyboard.is_pressed("ctrl") and keyboard.is_pressed("alt"):
             time.sleep(0.02)
 
     return audio_data
 
-def inputCheck():
-
-    """
-    Checks if both keys are pressed then runs the transcribeaudio function
-    checks for key input 20 times a second
-    """
+def input_check():
+    """Block until Ctrl and Alt are pressed simultaneously."""
 
     while True:
         if keyboard.is_pressed("ctrl") and keyboard.is_pressed("alt"):
             break
         time.sleep(0.05)
 
-def transcribeaudio(model, audio_data):
-    """
-    transcribes the audio in chunks and adds them together
-    also returns None if no audio input is given
-    """
+def transcribe_audio(whisper_model, audio_data):
+    """Transcribe recorded audio using Faster-Whisper.
+
+    Audio shorter than 0.5 seconds is ignored. Voice activity
+    detection is enabled to filter out non-speech segments.
+
+    Args:
+        whisper_model (WhisperModel): Initialized Faster-Whisper model.
+        audio_data (list[np.ndarray]): Recorded audio chunks.
+
+    Returns:
+        str | None: Transcribed text, or None if no usable speech
+        was detected.
+    """ 
+
     if not audio_data:
         return
 
@@ -147,7 +154,7 @@ def transcribeaudio(model, audio_data):
     if len(audio_np) < SAMPLE_RATE * 0.5:
         return
 
-    segments, info = model.transcribe(
+    segments, _ = whisper_model.transcribe(
         audio_np, beam_size=5, language="en", vad_filter=True
     )
     text = "".join([segment.text for segment in segments]).strip()
@@ -155,48 +162,61 @@ def transcribeaudio(model, audio_data):
     if text:
         return text
 
-def qTypeanalysis(prompt_):
+def analyze_question_type(prompt):
+    """Classify a user prompt as requiring text or visual context.
 
+    Sends the transcribed prompt to the intent-classification model,
+    which returns either ``TEXT`` or ``VISION``.
+
+    Args:
+        prompt (str): Transcribed user question.
+
+    Returns:
+        tuple[str, str]: Classification and model reasoning.
     """
-    Analyses the question and determines if it is a vision or text based question
-
-    also the funny thing is the context that the ai will use is GENERATED BY AI LOL
-    (das basically like radio communication lol) XD
-    """
-
-    if(prompt_ is None or prompt_.strip() == ""):
-        return "terminate", "Audio input was either not detected or too short"
     response = client.chat.completions.create(
-    model="MiniMaxAI/MiniMax-M3",
-     messages=[
-        {
-            "role": "system",
-            "content": question_decider_context
+        model=CLASSIFIER_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": QUESTION_DECIDER_CONTEXT
             },
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": prompt_
+                        "text": prompt
                     }
                 ]
             }
         ]
     )
+    
     answer_json = response.to_json()
     answer_json = json.loads(answer_json)
     answer = answer_json["choices"][0]["message"]["content"]
+    answer = answer.strip().upper()
     answer_reasoning = answer_json["choices"][0]["message"]["reasoning_content"]
+    if answer not in {"TEXT", "VISION"}:
+        return "UNKNOWN", answer_reasoning
 
     return answer, answer_reasoning
 
-def textAI(prompt_text):
+def generate_text_response(prompt):
+    """Generate a response to a text-only user query.
+
+    Args:
+        prompt (str): User's transcribed question.
+
+    Returns:
+        tuple[str, str]: Generated answer and model reasoning.
+    """
 
     print("Processing text based stuff")
 
     response = client.chat.completions.create(
-    model="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+    model=TEXT_MODEL,
     messages=[
         {
             "role": "system",
@@ -207,7 +227,7 @@ def textAI(prompt_text):
                 "content": [
                     {
                         "type": "text",
-                        "text": prompt_text
+                        "text": prompt
                     }
                 ]
             }
@@ -222,33 +242,37 @@ def textAI(prompt_text):
 
 
 def main():
-    model = modelDecider()
+    whisper_model = model_decider()
     print("Model loaded successfully.")
     try:
         while True:
-            inputCheck()
-            audio_data = audioRecord()
+            input_check()
+            audio_data = audio_record()
             print("DONE")
-            prompt = transcribeaudio(model, audio_data)
-            print(prompt + "\n")
+            prompt = transcribe_audio(whisper_model, audio_data)
+            if not prompt:
+                print("No speech detected.")
+                continue
+            else:
+                print(f"{prompt} \n")
 
-            qType, qType_reasoning = qTypeanalysis(prompt)
-            print(qType)
-            print(qType_reasoning + "\n\n")
+            question_type, question_type_reasoning = analyze_question_type(prompt)
+            print(question_type)
+            print(f"{question_type_reasoning} \n\n")
             answer, answer_reasoning = "", ""
-            if(qType == "terminate"):
+            if(question_type == "terminate"):
                 pass
-            elif(qType == "VISION"):
+            elif(question_type == "VISION"):
                 pass
-            elif(qType == "TEXT"):
-                answer, answer_reasoning = textAI(prompt)
-                print(answer + "\n")
+            elif(question_type == "TEXT"):
+                answer, answer_reasoning = generate_text_response(prompt)
+                print(f"{answer} \n")
                 print(answer_reasoning)
             else:
                 pass
 
     except KeyboardInterrupt:
-        print(f"EXIT\n{model}")
+        print(f"EXIT\n{whisper_model}")
 
 
 if __name__ == "__main__":
