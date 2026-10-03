@@ -1,7 +1,9 @@
 import json
 import os
 import time
+import io
 
+import base64
 import ctranslate2
 import keyboard
 import numpy as np
@@ -10,6 +12,7 @@ import torch
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from openai import OpenAI
+import pyautogui
 
 load_dotenv()
 
@@ -240,6 +243,42 @@ def generate_text_response(prompt):
     
     return answer, answer_reasoning
 
+def generate_vision_response(prompt):
+
+    screenshot = pyautogui.screenshot()
+
+    ss_ram = io.BytesIO()
+    screenshot.save(ss_ram, format="PNG")
+    ss_ram.seek(0)
+
+    ss_base64 = base64.b64encode(ss_ram.read()).decode("utf-8")
+    ss_url = f"data:image/png;base64,{ss_base64}"
+
+    response = client.chat.completions.create(
+    model="zai-org/GLM-5.3-Flash",
+    messages=[
+        {
+            "role": "system",
+            "content": """SYSTEM_PROMPT"""
+        },
+        {
+            "role": "user",
+            "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url" : ss_url
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+    return (response.choices[0].message.content), ("1")
 
 def main():
     whisper_model = model_decider()
@@ -263,7 +302,9 @@ def main():
             if(question_type == "terminate"):
                 pass
             elif(question_type == "VISION"):
-                pass
+                answer, answer_reasoning = generate_vision_response(prompt)
+                print(answer)
+                print(answer_reasoning)
             elif(question_type == "TEXT"):
                 answer, answer_reasoning = generate_text_response(prompt)
                 print(f"{answer} \n")
