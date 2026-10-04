@@ -1,18 +1,18 @@
+import base64
+import io
 import json
 import os
 import time
-import io
 
-import base64
 import ctranslate2
 import keyboard
 import numpy as np
+import pyautogui
 import sounddevice as sd
 import torch
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from openai import OpenAI
-import pyautogui
 
 load_dotenv()
 
@@ -30,24 +30,7 @@ CLASSIFIER_MODEL = "MiniMaxAI/MiniMax-M3"
 TEXT_MODEL = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"
 VISION_MODEL = None
 
-
-QUESTION_DECIDER_CONTEXT = """
-    You are a lightweight intent classification engine. Your sole task is to analyze incoming user questions and classify whether answering them requires visual context (a screen capture/image) or purely text/system processing.
-
-    ## CLASSIFICATION RULES
-
-    1. **CLASSIFY AS VISION IF:**
-        - The user explicitly mentions looking at, reading, or analyzing the screen, UI, display, window, image, layout, or visual elements.
-        - Information required to answer the question is missing, ambiguous, or incomplete, and could be resolved by viewing the current display state. **Always default to `VISION` when in doubt.**
-
-    2. **CLASSIFY AS TEXT ONLY IF:**
-        - The question is fully self-contained, theoretical, code-only, conversational, or a direct system/CLI command with no missing contextual details.
-
-    ## OUTPUT FORMAT
-    RESPOND WITH EXACTLY ONE WORD:
-    TEXT OR VISION
-    dont add classification or anything just the two words TEXT or VISION
-    """
+conversation_history = []
 
 def vram_check():
     """Returns the total VRAM of the first CUDA device in GB.
@@ -165,7 +148,7 @@ def transcribe_audio(whisper_model, audio_data):
     if text:
         return text
 
-def analyze_question_type(prompt):
+def analyze_question_type(prompt, conversation_history):
     """Classify a user prompt as requiring text or visual context.
 
     Sends the transcribed prompt to the intent-classification model,
@@ -177,34 +160,66 @@ def analyze_question_type(prompt):
     Returns:
         tuple[str, str]: Classification and model reasoning.
     """
+    history_text = ""
+
+    for message in conversation_history:
+        history_text += f"{message['role']}: {message['content']}\n"
+
+    classifier_prompt = f"""
+You are a routing classifier.
+
+Your ONLY job is to classify the LATEST USER MESSAGE.
+
+Return EXACTLY ONE WORD:
+
+TEXT
+or
+VISION
+
+CONVERSATION HISTORY:
+{history_text}
+
+LATEST USER MESSAGE:
+{prompt}
+
+CLASSIFICATION RULES:
+
+TEXT:
+- The latest message can be answered using text.
+- General knowledge questions are TEXT.
+- Coding questions are TEXT.
+- Conversational questions are TEXT.
+- Follow-up questions are TEXT if their meaning can be understood from the conversation history.
+
+VISION:
+- The latest message requires seeing the user's screen, window, UI, image, or other visual information.
+- The user explicitly asks about something visible on their screen.
+- The answer cannot be determined from the conversation history and requires visual information.
+
+IMPORTANT:
+- Use the conversation history ONLY to understand references such as "it", "that", "this", or "they".
+- NEVER answer the latest user message.
+- NEVER explain your classification.
+- NEVER provide reasoning.
+- Output ONLY TEXT or VISION.
+"""
+
     response = client.chat.completions.create(
         model=CLASSIFIER_MODEL,
         messages=[
             {
-                "role": "system",
-                "content": QUESTION_DECIDER_CONTEXT
-            },
-            {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    }
-                ]
+                "content": classifier_prompt
             }
         ]
     )
     
-    answer_json = response.to_json()
-    answer_json = json.loads(answer_json)
-    answer = answer_json["choices"][0]["message"]["content"]
-    answer = answer.strip().upper()
-    answer_reasoning = answer_json["choices"][0]["message"]["reasoning_content"]
+    answer = response.choices[0].message.content.strip().upper()
+    print(f"RAW CLASSIFIER OUTPUT: {repr(answer)}")
     if answer not in {"TEXT", "VISION"}:
-        return "UNKNOWN", answer_reasoning
+        return "UNKNOWN"
 
-    return answer, answer_reasoning
+    return answer
 
 def generate_text_response(prompt):
     """Generate a response to a text-only user query.
@@ -218,30 +233,30 @@ def generate_text_response(prompt):
 
     print("Processing text based stuff")
 
+    global conversation_history
+
+    conversation_history.append({
+        "role": "user",
+        "content": prompt
+    })
+
     response = client.chat.completions.create(
-    model=TEXT_MODEL,
-    messages=[
-        {
-            "role": "system",
-            "content": "Answer the question in a concise and informative manner.while keeping the context of the previous questions."
-            },
+        model=TEXT_MODEL,
+        messages=[
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    }
-                ]
-            }
+                "role": "system",
+                "content": "Answer the question in a consice and informative manner."
+            },
+            *conversation_history
         ]
     )
-    answer_json = response.to_json()
-    answer_json = json.loads(answer_json)
-    answer = answer_json["choices"][0]["message"]["content"]
-    answer_reasoning = answer_json["choices"][0]["message"]["reasoning"]
-    
-    return answer, answer_reasoning
+    answer = response.choices[0].message.content
+    conversation_history.append({
+        "role": "assistant",
+        "content": answer
+    })
+
+    return answer
 
 def generate_vision_response(prompt):
 
@@ -295,22 +310,19 @@ def main():
             else:
                 print(f"{prompt} \n")
 
-            question_type, question_type_reasoning = analyze_question_type(prompt)
+            question_type = analyze_question_type(prompt,conversation_history)
             print(question_type)
-            print(f"{question_type_reasoning} \n\n")
             answer, answer_reasoning = "", ""
-            if(question_type == "terminate"):
-                pass
-            elif(question_type == "VISION"):
+            if(question_type == "VISION"):
                 answer, answer_reasoning = generate_vision_response(prompt)
                 print(answer)
                 print(answer_reasoning)
             elif(question_type == "TEXT"):
-                answer, answer_reasoning = generate_text_response(prompt)
+                answer = generate_text_response(prompt)
                 print(f"{answer} \n")
-                print(answer_reasoning)
+                # print(answer_reasoning)
             else:
-                pass
+                print("Unable to determine question type.")
 
     except KeyboardInterrupt:
         print(f"EXIT\n{whisper_model}")
