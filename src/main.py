@@ -28,7 +28,23 @@ client = OpenAI(
 
 CLASSIFIER_MODEL = "MiniMaxAI/MiniMax-M3"
 TEXT_MODEL = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"
-VISION_MODEL = None
+VISION_MODEL = "zai-org/GLM-5.3-Flash"
+
+VISION_SYSTEM_PROMPT = """
+You are PortAI, a desktop AI assistant that analyzes screenshots.
+
+Answer the user's question using only information that is clearly visible
+in the screenshot.
+
+Do not guess, infer, or invent information that is not visible.
+
+If the requested information is partially visible, clearly state what you
+can determine and what cannot be determined.
+
+If the screenshot is insufficient to answer the question, say so.
+
+Be concise and directly answer the user's question.
+"""
 
 conversation_history = []
 
@@ -245,7 +261,7 @@ def generate_text_response(prompt):
         messages=[
             {
                 "role": "system",
-                "content": "Answer the question in a consice and informative manner."
+                "content": "Answer the question in a concise and informative manner."
             },
             *conversation_history
         ]
@@ -262,6 +278,8 @@ def generate_vision_response(prompt):
 
     screenshot = pyautogui.screenshot()
 
+    print("screenshot taken")
+
     ss_ram = io.BytesIO()
     screenshot.save(ss_ram, format="PNG")
     ss_ram.seek(0)
@@ -270,11 +288,11 @@ def generate_vision_response(prompt):
     ss_url = f"data:image/png;base64,{ss_base64}"
 
     response = client.chat.completions.create(
-    model="zai-org/GLM-5.3-Flash",
+    model=VISION_MODEL,
     messages=[
         {
             "role": "system",
-            "content": """SYSTEM_PROMPT"""
+            "content": VISION_SYSTEM_PROMPT
         },
         {
             "role": "user",
@@ -293,7 +311,20 @@ def generate_vision_response(prompt):
             }
         ]
     )
-    return (response.choices[0].message.content), ("1")
+    answer = response.choices[0].message.content
+    reasoning = response.choices[0].message.reasoning_content
+
+    conversation_history.append({
+        "role": "user",
+        "content": prompt
+    })
+
+    conversation_history.append({
+        "role": "assistant",
+        "content": answer
+    })
+
+    return answer, reasoning
 
 def main():
     whisper_model = model_decider()
