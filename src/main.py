@@ -48,7 +48,7 @@ Be concise and directly answer the user's question.
 
 conversation_history = []
 
-def vram_check():
+def get_vram_gb():
     """Returns the total VRAM of the first CUDA device in GB.
 
     Returns:
@@ -62,7 +62,7 @@ def vram_check():
     except Exception:
         return -1
 
-def model_decider():
+def load_whisper_model():
     """
     Select and initialize a Whisper model based on available hardware.
 
@@ -74,18 +74,18 @@ def model_decider():
         WhisperModel: Initialized Faster-Whisper model.
     """
     if torch.cuda.is_available():
-        vram = vram_check()
-        if 0 < vram <= 3.0:
+        vram_gb = get_vram_gb()
+        if 0 < vram_gb <= 3.0:
             model_name = "base"
-        elif vram > 3.0:
+        elif vram_gb > 3.0:
             model_name = "turbo"
         else:
             model_name = "base"
         try:
-            supported_types = ctranslate2.get_supported_compute_types("cuda")
-            if "float16" in supported_types:
+            supported_compute_types = ctranslate2.get_supported_compute_types("cuda")
+            if "float16" in supported_compute_types:
                 compute_type = "float16"
-            elif "int8_float16" in supported_types:
+            elif "int8_float16" in supported_compute_types:
                 compute_type = "int8_float16"
             else:
                 compute_type = "float32"
@@ -99,7 +99,7 @@ def model_decider():
             print("Falling back to CPU.")
     return WhisperModel("base", device="cpu", compute_type="int8")
 
-def audio_record():
+def record_audio():
     """Record microphone input while Ctrl+Alt are held.
 
     Audio is captured in chunks through a sounddevice InputStream.
@@ -109,12 +109,12 @@ def audio_record():
         list[np.ndarray]: Recorded audio chunks.
     """
 
-    audio_data = []
+    audio_chunks = []
 
     def audio_callback(indata, _frames, _time_info, status):
         if status:
             print(status)
-        audio_data.append(indata.copy())
+        audio_chunks.append(indata.copy())
 
     # Explicitly using keyword arguments for safety
     with sd.InputStream(
@@ -123,9 +123,9 @@ def audio_record():
         while keyboard.is_pressed("ctrl") and keyboard.is_pressed("alt"):
             time.sleep(0.02)
 
-    return audio_data
+    return audio_chunks
 
-def input_check():
+def wait_for_hotkey():
     """Block until Ctrl and Alt are pressed simultaneously."""
 
     while True:
@@ -133,53 +133,56 @@ def input_check():
             break
         time.sleep(0.05)
 
-def transcribe_audio(whisper_model, audio_data):
+def transcribe_audio(whisper_model, audio_chunks):
     """Transcribe recorded audio using Faster-Whisper.
 
-    Audio shorter than 0.5 seconds is ignored. Voice activity
-    detection is enabled to filter out non-speech segments.
+    Ignores audio shorter than 0.5 seconds and uses voice activity
+    detection to filter out non-speech segments.
 
     Args:
         whisper_model (WhisperModel): Initialized Faster-Whisper model.
-        audio_data (list[np.ndarray]): Recorded audio chunks.
+        audio_chunks (list[np.ndarray]): Recorded audio chunks.
 
     Returns:
         str | None: Transcribed text, or None if no usable speech
         was detected.
-    """ 
+    """
 
-    if not audio_data:
+    if not audio_chunks:
         return
 
-    audio_np = np.concatenate(audio_data, axis=0).flatten().astype(np.float32)
+    audio_samples = np.concatenate(audio_chunks, axis=0).flatten().astype(np.float32)
 
-    if len(audio_np) < SAMPLE_RATE * 0.5:
+    if len(audio_samples) < SAMPLE_RATE * 0.5:
         return
 
     segments, _ = whisper_model.transcribe(
-        audio_np, beam_size=5, language="en", vad_filter=True
+        audio_samples, beam_size=5, language="en", vad_filter=True
     )
-    text = "".join([segment.text for segment in segments]).strip()
+    transcribed_text = "".join([segment.text for segment in segments]).strip()
 
-    if text:
-        return text
+    if transcribed_text:
+        return transcribed_text
 
-def analyze_question_type(prompt, conversation_history):
-    """Classify a user prompt as requiring text or visual context.
+def classify_query_type(prompt, conversation_history):
+    """Classify a user query as requiring text or visual context.
 
-    Sends the transcribed prompt to the intent-classification model,
-    which returns either ``TEXT`` or ``VISION``.
+    Uses the classifier model to determine whether the latest user
+    query can be answered using conversation history alone or requires
+    visual information from the user's screen.
 
     Args:
-        prompt (str): Transcribed user question.
+        prompt (str): Latest transcribed user query.
+        conversation_history (list[dict]): Previous conversation messages.
 
     Returns:
-        tuple[str, str]: Classification and model reasoning.
+        str: "TEXT", "VISION", or "UNKNOWN".
     """
-    history_text = ""
+
+    history_transcribed_text = ""
 
     for message in conversation_history:
-        history_text += f"{message['role']}: {message['content']}\n"
+        history_transcribed_text += f"{message['role']}: {message['content']}\n"
 
     classifier_prompt = f"""
 You are a routing classifier.
@@ -193,7 +196,7 @@ or
 VISION
 
 CONVERSATION HISTORY:
-{history_text}
+{history_transcribed_text}
 
 LATEST USER MESSAGE:
 {prompt}
@@ -201,7 +204,7 @@ LATEST USER MESSAGE:
 CLASSIFICATION RULES:
 
 TEXT:
-- The latest message can be answered using text.
+- The latest message can be answered using transcribed_text.
 - General knowledge questions are TEXT.
 - Coding questions are TEXT.
 - Conversational questions are TEXT.
@@ -238,16 +241,19 @@ IMPORTANT:
     return answer
 
 def generate_text_response(prompt):
-    """Generate a response to a text-only user query.
+    """Generate a response to a text-based user query.
+
+    Adds the user's query and the generated response to the
+    conversation history so that later queries can use the context.
 
     Args:
-        prompt (str): User's transcribed question.
+        prompt (str): Latest transcribed user query.
 
     Returns:
-        tuple[str, str]: Generated answer and model reasoning.
+        str: Generated response from the text model.
     """
 
-    print("Processing text based stuff")
+    print("Processing transcribed_text based stuff")
 
     global conversation_history
 
@@ -275,17 +281,30 @@ def generate_text_response(prompt):
     return answer
 
 def generate_vision_response(prompt):
+    """Generate a response using the user's current screen.
+
+    Captures a screenshot, sends it along with the user's query to
+    the vision model, and stores the resulting conversation in the
+    conversation history.
+
+    Args:
+        prompt (str): Latest user query about visual information.
+
+    Returns:
+        tuple[str, str]: Generated response and model reasoning.
+    """
+
 
     screenshot = pyautogui.screenshot()
 
     print("screenshot taken")
 
-    ss_ram = io.BytesIO()
-    screenshot.save(ss_ram, format="PNG")
-    ss_ram.seek(0)
+    screenshot_buffer = io.BytesIO()
+    screenshot.save(screenshot_buffer, format="PNG")
+    screenshot_buffer.seek(0)
 
-    ss_base64 = base64.b64encode(ss_ram.read()).decode("utf-8")
-    ss_url = f"data:image/png;base64,{ss_base64}"
+    screenshot_base64 = base64.b64encode(screenshot_buffer.read()).decode("utf-8")
+    ss_url = f"data:image/png;base64,{screenshot_base64}"
 
     response = client.chat.completions.create(
     model=VISION_MODEL,
@@ -327,21 +346,21 @@ def generate_vision_response(prompt):
     return answer, reasoning
 
 def main():
-    whisper_model = model_decider()
+    whisper_model = load_whisper_model()
     print("Model loaded successfully.")
     try:
         while True:
-            input_check()
-            audio_data = audio_record()
+            wait_for_hotkey()
+            audio_chunks = record_audio()
             print("DONE")
-            prompt = transcribe_audio(whisper_model, audio_data)
+            prompt = transcribe_audio(whisper_model, audio_chunks)
             if not prompt:
                 print("No speech detected.")
                 continue
             else:
                 print(f"{prompt} \n")
 
-            question_type = analyze_question_type(prompt,conversation_history)
+            question_type = classify_query_type(prompt,conversation_history)
             print(question_type)
             answer, answer_reasoning = "", ""
             if(question_type == "VISION"):
