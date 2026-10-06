@@ -13,6 +13,7 @@ import torch
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from openai import OpenAI
+from ping3 import ping
 
 load_dotenv()
 
@@ -47,6 +48,10 @@ Be concise and directly answer the user's question.
 """
 
 conversation_history = []
+
+def check_internet():
+    response = ping("8.8.8.8", timeout=2)
+    return response is not None
 
 def get_vram_gb():
     """Returns the total VRAM of the first CUDA device in GB.
@@ -346,6 +351,11 @@ def generate_vision_response(prompt):
     return answer, reasoning
 
 def main():
+    if(check_internet()):
+        pass
+    else:
+        print("No internet access")
+        return
     whisper_model = load_whisper_model()
     print("Model loaded successfully.")
     try:
@@ -366,7 +376,7 @@ def main():
             if(question_type == "VISION"):
                 answer, answer_reasoning = generate_vision_response(prompt)
                 print(answer)
-                print(answer_reasoning)
+                # print(answer_reasoning)
             elif(question_type == "TEXT"):
                 answer = generate_text_response(prompt)
                 print(f"{answer} \n")
