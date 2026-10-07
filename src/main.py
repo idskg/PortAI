@@ -220,12 +220,18 @@ VISION:
 - The user explicitly asks about something visible on their screen.
 - The answer cannot be determined from the conversation history and requires visual information.
 
+CLEARCONTEXT:
+- The latest message is a query about clearing the conversation context.
+- the user asks to clear the conversation history or context
+- the user may ask you to forget the previous messages
+- the user may ask you to reset the conversation
+
 IMPORTANT:
 - Use the conversation history ONLY to understand references such as "it", "that", "this", or "they".
 - NEVER answer the latest user message.
 - NEVER explain your classification.
 - NEVER provide reasoning.
-- Output ONLY TEXT or VISION.
+- Output ONLY TEXT or VISION or CLEARCONTEXT.
 """
 
     response = client.chat.completions.create(
@@ -240,7 +246,7 @@ IMPORTANT:
     
     answer = response.choices[0].message.content.strip().upper()
     print(f"RAW CLASSIFIER OUTPUT: {repr(answer)}")
-    if answer not in {"TEXT", "VISION"}:
+    if answer not in {"TEXT", "VISION", "CLEARCONTEXT"}:
         return "UNKNOWN"
 
     return answer
@@ -369,7 +375,7 @@ def main():
                 continue
             else:
                 print(f"{prompt} \n")
-
+            
             question_type = classify_query_type(prompt,conversation_history)
             print(question_type)
             answer, answer_reasoning = "", ""
@@ -381,6 +387,9 @@ def main():
                 answer = generate_text_response(prompt)
                 print(f"{answer} \n")
                 # print(answer_reasoning)
+            elif(question_type == "CLEARCONTEXT"):
+                conversation_history.clear()
+                print("Conversation context cleared.")
             else:
                 print("Unable to determine question type.")
 
